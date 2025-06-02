@@ -1,0 +1,16 @@
+body {
+    margin: 0;
+    overflow: hidden; /* Prevent scrollbars */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background-color: #000;
+}
+
+canvas {
+    /* border: 1px solid white; */ /* Removing fixed border */
+    display: block; /* To remove extra space below canvas if any */
+    width: 100%;
+    height: 100%;
+} 
