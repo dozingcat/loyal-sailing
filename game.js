@@ -52,12 +52,14 @@ const imageSources = {
     dog3Asleep: 'assets/dog-3-asleep.png',
     dog3Awake: 'assets/dog-3-awake.png',
     dog4Asleep: 'assets/dog-4-asleep.png',
-    dog4Awake: 'assets/dog-4-awake.png'
+    dog4Awake: 'assets/dog-4-awake.png',
+    pirateLeft: 'assets/pirate-left.png',
+    pirateRight: 'assets/pirate-right.png'
 };
 
 const dogTypes = [1, 2, 3, 4];
-const dogImageWidth = 60; // Approximate for layout, will use actual image dimensions for drawing
-const dogImageHeight = 60;
+const dogImageWidth = 75; // Increased from 60 by 25%
+const dogImageHeight = 75; // Increased from 60 by 25%
 
 let imagesLoaded = 0;
 const totalImages = Object.keys(imageSources).length;
@@ -132,6 +134,18 @@ const player = {
     hasMedicine: false,
     facingDirection: 'right', // 'left' or 'right'
     currentImageKey: 'shipEmptyRight' // Initial image
+};
+
+const pirate = {
+    x: -200, // Initial off-screen position
+    y: -200,
+    width: 120, // Pirate ship size (adjust as needed)
+    height: 120,
+    speed: 6, // Pirate speed
+    facingDirection: 'right',
+    currentImageKey: 'pirateRight',
+    isActive: false, // Becomes active when player has medicine
+    isReturning: false // Flag to indicate pirate is moving off-screen
 };
 
 // Add score variable
@@ -212,6 +226,20 @@ function drawScore() {
     ctx.fillText(`Score: ${score}`, 50, 70); // Adjusted position for larger canvas
 }
 
+function updatePirateImage() {
+    pirate.currentImageKey = pirate.facingDirection === 'left' ? 'pirateLeft' : 'pirateRight';
+}
+
+function drawPirate() {
+    if (!pirate.isActive && !pirate.isReturning) return; // Don't draw if fully inactive and not returning
+
+    if (images[pirate.currentImageKey] && images[pirate.currentImageKey].complete && images[pirate.currentImageKey].naturalHeight !== 0) {
+        ctx.drawImage(images[pirate.currentImageKey], pirate.x, pirate.y, pirate.width, pirate.height);
+    } else {
+        console.warn(`Pirate image ${pirate.currentImageKey} not ready to draw or is broken.`);
+    }
+}
+
 function update() {
     // Player movement
     let dx = 0;
@@ -270,6 +298,80 @@ function update() {
 
     // Game logic will go here (e.g., collision detection)
     checkCollisions();
+    updatePirate(); // Call pirate update logic
+
+    drawPlayer();
+    drawDogs();
+    drawScore();
+    drawPirate();
+}
+
+function updatePirate() {
+    if (!player.hasMedicine && pirate.isActive && !pirate.isReturning) {
+        // Player lost medicine (not by pirate yet), pirate should return
+        pirate.isReturning = true;
+    }
+
+    if (pirate.isReturning) {
+        // Move towards initial off-screen position (e.g., top-left)
+        const returnX = -200;
+        const returnY = -200;
+        const dx = returnX - pirate.x;
+        const dy = returnY - pirate.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < pirate.speed) {
+            pirate.x = returnX;
+            pirate.y = returnY;
+            pirate.isActive = false;
+            pirate.isReturning = false;
+        } else {
+            pirate.x += (dx / distance) * pirate.speed;
+            pirate.y += (dy / distance) * pirate.speed;
+            if (dx < 0) pirate.facingDirection = 'left';
+            else if (dx > 0) pirate.facingDirection = 'right';
+        }
+    } else if (player.hasMedicine) {
+        if (!pirate.isActive) {
+            // Activate pirate and place it randomly on one of the screen edges
+            pirate.isActive = true;
+            const edge = Math.floor(Math.random() * 4);
+            if (edge === 0) { // Top edge
+                pirate.x = Math.random() * canvas.width;
+                pirate.y = -pirate.height;
+            } else if (edge === 1) { // Bottom edge
+                pirate.x = Math.random() * canvas.width;
+                pirate.y = canvas.height;
+            } else if (edge === 2) { // Left edge
+                pirate.x = -pirate.width;
+                pirate.y = Math.random() * canvas.height;
+            } else { // Right edge
+                pirate.x = canvas.width;
+                pirate.y = Math.random() * canvas.height;
+            }
+            console.log("Pirate activated!");
+        }
+
+        // Chase player
+        const dx = player.x + player.width / 2 - (pirate.x + pirate.width / 2);
+        const dy = player.y + player.height / 2 - (pirate.y + pirate.height / 2);
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance > 0) { // Avoid division by zero if pirate is on player
+            pirate.x += (dx / distance) * pirate.speed;
+            pirate.y += (dy / distance) * pirate.speed;
+
+            if (dx < 0) pirate.facingDirection = 'left';
+            else if (dx > 0) pirate.facingDirection = 'right';
+        }
+    } else {
+        // If player doesn't have medicine and pirate is not active/returning, do nothing
+        // Or could add patrol logic here if desired
+    }
+
+    if (pirate.isActive || pirate.isReturning) {
+        updatePirateImage();
+    }
 }
 
 function checkCollisions() {
@@ -307,6 +409,17 @@ function checkCollisions() {
             }
         }
     });
+
+    // Check collision with pirate
+    if (pirate.isActive && !pirate.isReturning && rectCollision(player, pirate)) {
+        if (player.hasMedicine) {
+            player.hasMedicine = false;
+            console.log("The pirate stole your medicine!");
+            pirate.isReturning = true; // Pirate retreats after stealing
+            // updatePlayerImage() in main update() will handle player ship image change
+            // updatePirateImage() in updatePirate() will handle pirate image change if needed
+        }
+    }
 }
 
 function rectCollision(rect1, rect2) {
@@ -354,6 +467,7 @@ function draw() {
     drawPlayer();
     drawDogs();
     drawScore();
+    drawPirate();
 }
 
 function gameLoop() {
