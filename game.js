@@ -13,6 +13,11 @@ const worldHeight = 3600; // Double the canvas height
 const zoomLevel = 0.75; // Zoom out by 25% (objects appear 75% of original size on screen)
 const renderScaleMultiplier = 2.0; // Render at 2.0x resolution for crispness
 
+const NUM_ISLANDS = 4;
+const MIN_DIST_ISLAND_FACTORY_PADDING = 600; // Min space between factory and island edges
+const MIN_DIST_ISLAND_ISLAND_PADDING = 600;  // Min space between island edges
+const MIN_DIST_WORLD_EDGE = 150;            // Min space from island to world edge
+
 const camera = {
     x: 0,
     y: 0,
@@ -75,7 +80,17 @@ function imageLoaded() {
     imagesLoaded++;
     if (imagesLoaded === totalImages) {
         console.log("All images loaded. Starting game.");
+        initializeIslands();
         initializeDogsOnIslands();
+        // Initialize pirate position after islands are placed
+        if (islands.length > 0) {
+            pirate.x = islands[0].x + islands[0].width / 2 - pirate.width / 2; // Start at the first island
+            pirate.y = islands[0].y - pirate.height - 30; // Slightly above the first island
+        } else {
+            // Fallback if no islands, place off-screen (should not happen with NUM_ISLANDS > 0)
+            pirate.x = -200;
+            pirate.y = -200;
+        }
         gameLoop();
     }
 }
@@ -98,39 +113,107 @@ const factory = {
     height: 300
 };
 
-const islands = [
-    // Spread out in the larger world, now 50% bigger (360x360)
-    { x: worldWidth * 0.2 - 180, y: worldHeight * 0.2 - 180, width: 360, height: 360, imageKey: 'island1', dogs: [] }, 
-    { x: worldWidth * 0.8 - 180, y: worldHeight * 0.3 - 180, width: 360, height: 360, imageKey: 'island2', dogs: [] }, 
-    { x: worldWidth * 0.25 - 180, y: worldHeight * 0.75 - 180, width: 360, height: 360, imageKey: 'island3', dogs: [] }, 
-    { x: worldWidth * 0.7 - 180, y: worldHeight * 0.8 - 180, width: 360, height: 360, imageKey: 'island4', dogs: [] }
-];
+const islands = []; // Initialize as empty, will be populated
+
+function initializeIslands() {
+    islands.length = 0; // Clear for potential re-initialization
+    const islandWidth = 360;
+    const islandHeight = 360;
+    const islandImageKeys = ['island1', 'island2', 'island3', 'island4']; // Assuming 4 unique island images
+
+    for (let i = 0; i < NUM_ISLANDS; i++) {
+        let placed = false;
+        let attempts = 0;
+        const MAX_PLACEMENT_ATTEMPTS = 100;
+
+        while (!placed && attempts < MAX_PLACEMENT_ATTEMPTS) {
+            attempts++;
+            // Ensure potential island is within world boundaries minus padding and its own size
+            const newX = MIN_DIST_WORLD_EDGE + Math.random() * (worldWidth - islandWidth - 2 * MIN_DIST_WORLD_EDGE);
+            const newY = MIN_DIST_WORLD_EDGE + Math.random() * (worldHeight - islandHeight - 2 * MIN_DIST_WORLD_EDGE);
+
+            const potentialIsland = {
+                x: newX,
+                y: newY,
+                width: islandWidth,
+                height: islandHeight,
+                imageKey: islandImageKeys[i % islandImageKeys.length], // Cycle through images if NUM_ISLANDS > 4
+                dogs: []
+            };
+
+            let isValidPosition = true;
+
+            // Check against factory (using padded factory for collision)
+            const paddedFactory = {
+                x: factory.x - MIN_DIST_ISLAND_FACTORY_PADDING,
+                y: factory.y - MIN_DIST_ISLAND_FACTORY_PADDING,
+                width: factory.width + 2 * MIN_DIST_ISLAND_FACTORY_PADDING,
+                height: factory.height + 2 * MIN_DIST_ISLAND_FACTORY_PADDING
+            };
+            if (rectCollision(potentialIsland, paddedFactory)) {
+                isValidPosition = false;
+            }
+
+            // Check against other already placed islands (using padded existing islands)
+            if (isValidPosition) {
+                for (const placedIsland of islands) {
+                    const paddedPlacedIsland = {
+                        x: placedIsland.x - MIN_DIST_ISLAND_ISLAND_PADDING,
+                        y: placedIsland.y - MIN_DIST_ISLAND_ISLAND_PADDING,
+                        width: placedIsland.width + 2 * MIN_DIST_ISLAND_ISLAND_PADDING,
+                        height: placedIsland.height + 2 * MIN_DIST_ISLAND_ISLAND_PADDING
+                    };
+                    if (rectCollision(potentialIsland, paddedPlacedIsland)) {
+                        isValidPosition = false;
+                        break;
+                    }
+                }
+            }
+
+            if (isValidPosition) {
+                islands.push(potentialIsland);
+                placed = true;
+            }
+        }
+
+        if (!placed) {
+            console.warn(`Island ${i + 1} (image: ${potentialIsland.imageKey}) could not be placed after ${MAX_PLACEMENT_ATTEMPTS} attempts due to spacing constraints.`);
+            // Fallback: place it somewhere less ideal or skip. For now, just log and it won't be added.
+        }
+    }
+    console.log("Islands initialized at random positions:", JSON.parse(JSON.stringify(islands)));
+}
 
 function initializeDogsOnIslands() {
     islands.forEach(island => {
-        const availableDogTypes = [...dogTypes];
+        // Ensure island.dogs is an empty array before populating
+        island.dogs = []; 
+        const availableDogTypes = [...dogTypes]; // dogTypes should be [1,2,3,4]
+        
         for (let i = 0; i < 2; i++) { // Add two dogs to each island
-            if (availableDogTypes.length === 0) break; // Should not happen with 4 types and 2 dogs
+            if (availableDogTypes.length === 0) break; 
 
             const randomIndex = Math.floor(Math.random() * availableDogTypes.length);
-            const dogType = availableDogTypes.splice(randomIndex, 1)[0]; // Pick and remove a random type
+            const dogType = availableDogTypes.splice(randomIndex, 1)[0];
 
             // Position dogs side-by-side on the island
+            // dogImageWidth and dogImageHeight are global constants (e.g., 112.5)
             const xOffset = (island.width / 2) - dogImageWidth + (i * (dogImageWidth + 20)); // 20px spacing
             const yOffset = (island.height / 2) - (dogImageHeight / 2);
 
             island.dogs.push({
                 type: dogType,
                 state: 'asleep',
+                // Calculate absolute world coordinates for the dog
                 x: island.x + xOffset,
                 y: island.y + yOffset,
-                width: dogImageWidth, // Will be replaced by actual image width later if needed
-                height: dogImageHeight, // Will be replaced by actual image height later if needed
+                width: dogImageWidth, 
+                height: dogImageHeight, 
                 currentImageKey: `dog${dogType}Asleep`
             });
         }
     });
-    console.log("Initialized dogs on islands:", islands.map(i => i.dogs)); // For debugging
+    // console.log("Initialized dogs on islands:", islands.map(i => ({islandKey: i.imageKey, dogs: i.dogs}))); // More detailed log
 }
 
 const player = {
@@ -148,16 +231,23 @@ const player = {
 };
 
 const pirate = {
-    x: -200, // Initial off-screen position
-    y: -200,
-    width: 120, // Pirate ship size (adjust as needed)
+    x: 0, // Will be set near the first island initially
+    y: 0,
+    width: 120,
     height: 120,
-    speed: 6, // Pirate speed
+    speed: 5, // Slightly reduced speed for patrolling, can be increased when chasing if desired
     facingDirection: 'right',
     currentImageKey: 'pirateRight',
-    isActive: false, // Becomes active when player has medicine
-    isReturning: false // Flag to indicate pirate is moving off-screen
+    isActive: true, // Pirate is always active (patrolling or chasing)
+    patrolTargetIndex: 0, // Start by targeting the first island
+    isChasing: false, // New flag to distinguish between patrolling and chasing
+    isDepartingIsland: false, // New flag for departure maneuver
+    departureTargetX: 0,    // Target X for departure
+    departureTargetY: 0,    // Target Y for departure
 };
+
+const PIRATE_DEPARTURE_DISTANCE = 250; // How far pirate moves away from an island after reaching it
+const PATROL_ARRIVAL_RADIUS = pirate.width + 100; // How close pirate needs to be to island center for patrol arrival
 
 // Add score variable
 let score = 0;
@@ -390,72 +480,124 @@ function update() {
 }
 
 function updatePirate() {
-    if (!player.hasMedicine && pirate.isActive && !pirate.isReturning) {
-        // Player lost medicine (not by pirate yet), pirate should return
-        pirate.isReturning = true;
-    }
+    if (!pirate.isActive || islands.length === 0) return;
 
-    if (pirate.isReturning) {
-        // Move towards initial off-screen position (e.g., top-left)
-        const returnX = -200;
-        const returnY = -200;
-        const dx = returnX - pirate.x;
-        const dy = returnY - pirate.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance < pirate.speed) {
-            pirate.x = returnX;
-            pirate.y = returnY;
-            pirate.isActive = false;
-            pirate.isReturning = false;
-        } else {
-            pirate.x += (dx / distance) * pirate.speed;
-            pirate.y += (dy / distance) * pirate.speed;
-            if (dx < 0) pirate.facingDirection = 'left';
-            else if (dx > 0) pirate.facingDirection = 'right';
-        }
-    } else if (player.hasMedicine) {
-        if (!pirate.isActive) {
-            pirate.isActive = true;
-            pirate.isReturning = false; // Ensure it is not returning when activated
-            const edge = Math.floor(Math.random() * 4);
-            // Spawn relative to camera view, then convert to world coordinates
-            if (edge === 0) { // Top edge of camera
-                pirate.x = camera.x + Math.random() * camera.width;
-                pirate.y = camera.y - pirate.height;
-            } else if (edge === 1) { // Bottom edge of camera
-                pirate.x = camera.x + Math.random() * camera.width;
-                pirate.y = camera.y + camera.height;
-            } else if (edge === 2) { // Left edge of camera
-                pirate.x = camera.x - pirate.width;
-                pirate.y = camera.y + Math.random() * camera.height;
-            } else { // Right edge of camera
-                pirate.x = camera.x + camera.width;
-                pirate.y = camera.y + Math.random() * camera.height;
-            }
-            console.log("Pirate activated at world coords:", pirate.x, pirate.y);
-        }
-
-        // Chase player
-        const dx = player.x + player.width / 2 - (pirate.x + pirate.width / 2);
-        const dy = player.y + player.height / 2 - (pirate.y + pirate.height / 2);
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance > 0) { // Avoid division by zero if pirate is on player
-            pirate.x += (dx / distance) * pirate.speed;
-            pirate.y += (dy / distance) * pirate.speed;
-
-            if (dx < 0) pirate.facingDirection = 'left';
-            else if (dx > 0) pirate.facingDirection = 'right';
-        }
+    // Determine mode: Chasing, Departing, or Patrolling
+    if (player.hasMedicine) {
+        pirate.isChasing = true;
+        pirate.isDepartingIsland = false; // Chasing overrides departure
     } else {
-        // If player doesn't have medicine and pirate is not active/returning, do nothing
-        // Or could add patrol logic here if desired
+        pirate.isChasing = false;
     }
 
-    if (pirate.isActive || pirate.isReturning) {
-        updatePirateImage();
+    let targetCenterX, targetCenterY; // These will be the center of what the pirate aims for
+    let currentPirateSpeed = pirate.speed;
+    const pirateCurrentCenterX = pirate.x + pirate.width / 2;
+    const pirateCurrentCenterY = pirate.y + pirate.height / 2;
+
+    if (pirate.isChasing) {
+        targetCenterX = player.x + player.width / 2;
+        targetCenterY = player.y + player.height / 2;
+    } else if (pirate.isDepartingIsland) {
+        targetCenterX = pirate.departureTargetX; // This was already set as a center point
+        targetCenterY = pirate.departureTargetY;
+
+        const dxToDeparture = targetCenterX - pirateCurrentCenterX;
+        const dyToDeparture = targetCenterY - pirateCurrentCenterY;
+        const distanceToDeparture = Math.sqrt(dxToDeparture * dxToDeparture + dyToDeparture * dyToDeparture);
+
+        if (distanceToDeparture < currentPirateSpeed) { // Reached departure point
+            pirate.isDepartingIsland = false;
+            pirate.patrolTargetIndex = (pirate.patrolTargetIndex + 1) % islands.length;
+            // Fall through to patrol mode in the next frame or immediately set next patrol target for this frame if not chasing
+            if (!pirate.isChasing) { // Should always be true here, but good check
+                const nextPatrolIsland = islands[pirate.patrolTargetIndex];
+                targetCenterX = nextPatrolIsland.x + nextPatrolIsland.width / 2;
+                targetCenterY = nextPatrolIsland.y + nextPatrolIsland.height / 2;
+            }
+        }
+    } else { // Patrolling (and not chasing, not departing)
+        const currentPatrolIsland = islands[pirate.patrolTargetIndex];
+        targetCenterX = currentPatrolIsland.x + currentPatrolIsland.width / 2;
+        targetCenterY = currentPatrolIsland.y + currentPatrolIsland.height / 2;
+
+        const dxToPatrol = targetCenterX - pirateCurrentCenterX;
+        const dyToPatrol = targetCenterY - pirateCurrentCenterY;
+        const distanceToPatrol = Math.sqrt(dxToPatrol * dxToPatrol + dyToPatrol * dyToPatrol);
+
+        if (distanceToPatrol < PATROL_ARRIVAL_RADIUS) { // Changed condition to use PATROL_ARRIVAL_RADIUS
+            pirate.isDepartingIsland = true;
+
+            // Calculate departure target: move away from currentPatrolIsland center
+            const dirFromIslandX = pirateCurrentCenterX - targetCenterX; // Vector from island center to pirate center
+            const dirFromIslandY = pirateCurrentCenterY - targetCenterY;
+            const magDirFromIsland = Math.sqrt(dirFromIslandX * dirFromIslandX + dirFromIslandY * dirFromIslandY);
+
+            let normDirX = dirFromIslandX / (magDirFromIsland || 1); // Avoid NaN if magnitude is 0
+            let normDirY = dirFromIslandY / (magDirFromIsland || 1);
+
+            if (magDirFromIsland < 0.1) { // If pirate is (almost) on island center, pick a random direction
+                const randomAngle = Math.random() * 2 * Math.PI;
+                normDirX = Math.cos(randomAngle);
+                normDirY = Math.sin(randomAngle);
+            }
+            
+            pirate.departureTargetX = pirateCurrentCenterX + normDirX * PIRATE_DEPARTURE_DISTANCE;
+            pirate.departureTargetY = pirateCurrentCenterY + normDirY * PIRATE_DEPARTURE_DISTANCE;
+            
+            // For this frame, aim for the newly set departure target
+            targetCenterX = pirate.departureTargetX;
+            targetCenterY = pirate.departureTargetY;
+        }
     }
+
+    // Calculate delta for pirate's top-left to reach the target (whose center is targetCenterX/Y)
+    const targetTopLeftX = targetCenterX - pirate.width / 2;
+    const targetTopLeftY = targetCenterY - pirate.height / 2;
+
+    const dx = targetTopLeftX - pirate.x;
+    const dy = targetTopLeftY - pirate.y;
+    const distanceToFinalTarget = Math.sqrt(dx * dx + dy * dy);
+
+    let moveDx = 0;
+    let moveDy = 0;
+
+    if (distanceToFinalTarget > currentPirateSpeed / 4) {
+        moveDx = (dx / distanceToFinalTarget) * currentPirateSpeed;
+        moveDy = (dy / distanceToFinalTarget) * currentPirateSpeed;
+    }
+
+    // Check horizontal collision
+    if (moveDx !== 0) {
+        const potentialPirateX = { x: pirate.x + moveDx, y: pirate.y, width: pirate.width, height: pirate.height };
+        if (!isCollidingWithObstacles(potentialPirateX)) {
+            pirate.x += moveDx;
+        }
+    }
+    // Check vertical collision
+    if (moveDy !== 0) {
+        const potentialPirateY = { x: pirate.x, y: pirate.y + moveDy, width: pirate.width, height: pirate.height };
+        if (!isCollidingWithObstacles(potentialPirateY)) {
+            pirate.y += moveDy;
+        }
+    }
+
+    // Update facing direction based on intended movement vector (dx, dy towards targetTopLeft)
+    // even if blocked, it faces where it wants to go.
+    if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) { // Check if there was any intended movement
+        if (Math.abs(dx) > Math.abs(dy) * 0.5) { // Prioritize horizontal facing if significant horizontal movement
+            pirate.facingDirection = dx > 0 ? 'right' : 'left';
+        } else if (Math.abs(dy) < 0.1 && Math.abs(dx) < 0.1) {
+            // No significant movement, keep current direction or default
+        } else {
+            // Primarily vertical movement, but dx might still determine side if not perfectly vertical
+            // This part can be tricky. For now, if dx is very small, it will keep previous direction
+            // or we can decide a default. Let's stick to dx based primarily.
+             if (Math.abs(dx) > 0.1) pirate.facingDirection = dx > 0 ? 'right' : 'left';
+        }
+    }
+    
+    updatePirateImage();
 }
 
 function checkCollisions() {
@@ -495,13 +637,12 @@ function checkCollisions() {
     });
 
     // Check collision with pirate
-    if (pirate.isActive && !pirate.isReturning && rectCollision(player, pirate)) {
+    if (pirate.isActive && rectCollision(player, pirate)) { // Removed !pirate.isReturning, using pirate.isChasing implicitly
         if (player.hasMedicine) {
             player.hasMedicine = false;
             console.log("The pirate stole your medicine!");
-            pirate.isReturning = true; // Pirate retreats after stealing
+            pirate.isChasing = false; // Pirate stops chasing and resumes patrol
             // updatePlayerImage() in main update() will handle player ship image change
-            // updatePirateImage() in updatePirate() will handle pirate image change if needed
         }
     }
 }
@@ -655,7 +796,15 @@ canvas.addEventListener('touchcancel', handlePointerUp);
 // Initial check in case images are already cached and loaded quickly
 if (imagesLoaded === totalImages && totalImages > 0) {
     console.log("Images were already cached. Starting game.");
+    initializeIslands();
     initializeDogsOnIslands();
+    if (islands.length > 0) {
+        pirate.x = islands[0].x + islands[0].width / 2 - pirate.width / 2;
+        pirate.y = islands[0].y - pirate.height - 30;
+    } else {
+        pirate.x = -200;
+        pirate.y = -200;
+    }
     gameLoop();
 } else if (totalImages === 0) {
     console.error("No images to load.");
