@@ -249,8 +249,15 @@ const pirate = {
 const PIRATE_DEPARTURE_DISTANCE = 250; // How far pirate moves away from an island after reaching it
 const PATROL_ARRIVAL_RADIUS = pirate.width + 100; // How close pirate needs to be to island center for patrol arrival
 
-// Add score variable
-let score = 0;
+let gameState = 'playing'; // Can be 'playing', 'won'
+let canRestartOnClick = false; // For managing restart input after winning
+
+// Remove score, add time and dog tracking
+// let score = 0; 
+let gameStartTime = Date.now();
+let elapsedTime = "00:00";
+let dogsRemaining = 0;
+let finalGameTime = "00:00"; // To store time when game is won
 
 const obstacleCollisionPadding = 40; // Allows player to overlap edges by this much
 
@@ -355,27 +362,78 @@ function drawDogs() {
     });
 }
 
-function drawScore() {
-    ctx.fillStyle = 'white';
-    ctx.font = '48px Arial'; // Increased font size for 2400x1800 canvas
-    ctx.textAlign = 'left';
-    ctx.fillText(`Score: ${score}`, 50, 70); // Adjusted position for larger canvas
-}
-
-function updatePirateImage() {
-    pirate.currentImageKey = pirate.facingDirection === 'left' ? 'pirateLeft' : 'pirateRight';
-}
-
 function drawPirate() {
-    if (!pirate.isActive && !pirate.isReturning) return;
+    // Only draw if pirate is active (which covers patrolling or chasing)
+    if (!pirate.isActive) return; 
+
     if (rectAppearsInCamera(pirate)) {
         if (images[pirate.currentImageKey] && images[pirate.currentImageKey].complete && images[pirate.currentImageKey].naturalHeight !== 0) {
             ctx.drawImage(images[pirate.currentImageKey], pirate.x, pirate.y, pirate.width, pirate.height);
+        } else {
+            // console.warn(`Pirate image ${pirate.currentImageKey} not ready or broken.`); // Can be spammy
         }
     }
 }
 
+function drawGameStats() {
+    ctx.save();
+    // Reset transform to draw UI elements in screen space
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    const actualCanvasWidth = canvas.width / renderScaleMultiplier;
+    const actualCanvasHeight = canvas.height / renderScaleMultiplier;
+
+    ctx.fillStyle = 'white';
+    ctx.font = '40px Arial'; // Adjusted font size for stats
+    ctx.textAlign = 'left';
+    
+    // Display elapsed time
+    const timeText = `Time: ${elapsedTime}`;
+    ctx.fillText(timeText, 20, 50); // Position top-left
+
+    // Display remaining dogs as unicode characters
+    let dogIcons = '';
+    for (let i = 0; i < dogsRemaining; i++) {
+        dogIcons += '🐶';
+    }
+    const dogsText = `Dogs: ${dogIcons}`;
+    const dogsTextMeasure = ctx.measureText(dogsText);
+    // Position top-right, considering the length of the dog icons string
+    ctx.fillText(dogsText, actualCanvasWidth - dogsTextMeasure.width - 20, 50); 
+
+    ctx.restore();
+}
+
+function drawWinMessage() {
+    if (gameState === 'won') {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(0, 0, canvas.width / renderScaleMultiplier, canvas.height / renderScaleMultiplier);
+
+        ctx.font = 'bold 70px Arial'; // Slightly smaller to make space for time
+        ctx.fillStyle = 'gold';
+        ctx.textAlign = 'center';
+        ctx.fillText("YOU WIN!", canvas.width / (2 * renderScaleMultiplier), canvas.height / (2 * renderScaleMultiplier) - 80);
+        
+        ctx.font = '40px Arial';
+        ctx.fillStyle = 'white';
+        ctx.fillText(`Time: ${finalGameTime}`, canvas.width / (2 * renderScaleMultiplier), canvas.height / (2 * renderScaleMultiplier) - 20);
+        ctx.fillText("Click or Tap to Play Again", canvas.width / (2 * renderScaleMultiplier), canvas.height / (2 * renderScaleMultiplier) + 40);
+        ctx.restore();
+    }
+}
+
 function update() {
+    if (gameState === 'won') {
+        // Game is won, don't update game logic, only listen for restart
+        // The draw loop will continue to show the win message
+        return;
+    }
+
+    updateGameTimersAndDogCount(); // Update time and dog count each frame
+
     let dx = 0;
     let dy = 0;
 
@@ -475,7 +533,6 @@ function update() {
 
     drawPlayer();
     drawDogs();
-    drawScore();
     drawPirate();
 }
 
@@ -600,87 +657,58 @@ function updatePirate() {
     updatePirateImage();
 }
 
-function checkCollisions() {
-    // Check collision with factory
-    if (rectCollision(player, factory)) {
-        if (!player.hasMedicine) {
-            player.hasMedicine = true;
-            console.log("Picked up medicine!");
-            // updatePlayerImage() is already called in the main update loop,
-            // so the image will change automatically.
+function updateGameTimersAndDogCount() {
+    // Update elapsed time
+    const now = Date.now();
+    const deltaSeconds = Math.floor((now - gameStartTime) / 1000);
+    const minutes = Math.floor(deltaSeconds / 60);
+    const seconds = deltaSeconds % 60;
+    elapsedTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+    // Update remaining dogs count
+    updateDogsRemainingCount();
+}
+
+function checkWinCondition() {
+    if (gameState !== 'playing') return; 
+    if (islands.length === 0 && NUM_ISLANDS > 0) return; 
+
+    let allDogsAwake = true;
+    for (const island of islands) {
+        if (island.dogs.length === 0 && NUM_ISLANDS > 0 && islands.length > 0) {
+            // This case implies islands were initialized but dogs weren't for some reason for THIS island
+            // Or an island has no dogs assigned which shouldn't happen with current logic.
+            // For robustness, treat as not all dogs awake if an island expected to have dogs has none.
+            allDogsAwake = false; 
+            break;
         }
-    }
-
-    // Collision with islands for delivery will be added later
-    islands.forEach(island => {
-        if (rectCollision(player, island)) {
-            if (player.hasMedicine) {
-                let medicineDeliveredThisIsland = false;
-                island.dogs.forEach(dog => {
-                    if (dog.state === 'asleep') {
-                        dog.state = 'awake';
-                        dog.currentImageKey = `dog${dog.type}Awake`;
-                        score += 10; // Add 10 points for each woken dog
-                        medicineDeliveredThisIsland = true;
-                        console.log(`Dog type ${dog.type} on ${island.imageKey} woke up! Score: ${score}`);
-                    }
-                });
-
-                if (medicineDeliveredThisIsland) {
-                    player.hasMedicine = false; // Only consume medicine if a dog was woken up
-                    console.log(`Delivered medicine to ${island.imageKey}!`);
-                    // updatePlayerImage() is already called in the main update loop,
-                    // so the image will change automatically back to empty.
-                }
+        for (const dog of island.dogs) {
+            if (dog.state === 'asleep') {
+                allDogsAwake = false;
+                break; 
             }
         }
-    });
-
-    // Check collision with pirate
-    if (pirate.isActive && rectCollision(player, pirate)) { // Removed !pirate.isReturning, using pirate.isChasing implicitly
-        if (player.hasMedicine) {
-            player.hasMedicine = false;
-            console.log("The pirate stole your medicine!");
-            pirate.isChasing = false; // Pirate stops chasing and resumes patrol
-            // updatePlayerImage() in main update() will handle player ship image change
-        }
+        if (!allDogsAwake) break;
+    }
+    
+    if (allDogsAwake && (NUM_ISLANDS === 0 || islands.length > 0) ) { // Ensure it only wins if there are islands or no islands are intended
+        finalGameTime = elapsedTime; // Store the current elapsed time as final time
+        gameState = 'won';
+        canRestartOnClick = false; 
+        console.log(`YOU WIN!!! All dogs are awake! Time: ${finalGameTime}`);
     }
 }
 
-function rectCollision(rect1, rect2) {
-    return (
-        rect1.x < rect2.x + rect2.width &&
-        rect1.x + rect1.width > rect2.x &&
-        rect1.y < rect2.y + rect2.height &&
-        rect1.y + rect1.height > rect2.y
-    );
-}
-
-function isCollidingWithObstacles(rect) {
-    // Check collision with the factory
-    const effectiveFactoryHitbox = {
-        x: factory.x + obstacleCollisionPadding,
-        y: factory.y + obstacleCollisionPadding,
-        width: Math.max(0, factory.width - 2 * obstacleCollisionPadding), // Ensure width doesn't go negative
-        height: Math.max(0, factory.height - 2 * obstacleCollisionPadding) // Ensure height doesn't go negative
-    };
-    if (rectCollision(rect, effectiveFactoryHitbox)) {
-        return true;
-    }
-
-    // Check collision with any of the islands
+function updateDogsRemainingCount() {
+    let count = 0;
     for (const island of islands) {
-        const effectiveIslandHitbox = {
-            x: island.x + obstacleCollisionPadding,
-            y: island.y + obstacleCollisionPadding,
-            width: Math.max(0, island.width - 2 * obstacleCollisionPadding),
-            height: Math.max(0, island.height - 2 * obstacleCollisionPadding)
-        };
-        if (rectCollision(rect, effectiveIslandHitbox)) {
-            return true;
+        for (const dog of island.dogs) {
+            if (dog.state === 'asleep') {
+                count++;
+            }
         }
     }
-    return false;
+    dogsRemaining = count;
 }
 
 function draw() {
@@ -703,7 +731,8 @@ function draw() {
     ctx.restore(); // This restores the scale and translate
 
     // Draw UI elements (like score) last, so they are on top and not affected by camera or zoom
-    drawScore();
+    drawGameStats();
+    drawWinMessage(); // Draw win message on top if game is won
 }
 
 function gameLoop() {
@@ -722,6 +751,17 @@ function updateCamera() {
     camera.y = Math.max(0, Math.min(targetY, worldHeight - camera.height));
 }
 
+// Helper function for AABB collision detection
+function rectCollision(rect1, rect2) {
+    if (!rect1 || !rect2) return false; // Basic guard against undefined rects
+    return (
+        rect1.x < rect2.x + rect2.width &&
+        rect1.x + rect1.width > rect2.x &&
+        rect1.y < rect2.y + rect2.height &&
+        rect1.y + rect1.height > rect2.y
+    );
+}
+
 // Helper function to check if a rectangle is within camera view
 function rectAppearsInCamera(rect) {
     return (
@@ -734,7 +774,15 @@ function rectAppearsInCamera(rect) {
 
 // Event listeners for click/touch steering
 function handlePointerDown(event) {
-    event.preventDefault(); // Prevent default browser actions (like scrolling on touch)
+    if (gameState === 'won') {
+        if (canRestartOnClick) {
+            resetGame();
+        }
+        // Regardless, a click when game is won shouldn't do normal game actions immediately
+        return; 
+    }
+
+    event.preventDefault(); 
     const rect = canvas.getBoundingClientRect();
     let clickX, clickY;
 
@@ -782,7 +830,13 @@ canvas.addEventListener('mousemove', handlePointerMove);
 canvas.addEventListener('touchmove', handlePointerMove, { passive: false });
 
 function handlePointerUp(event) {
-    // No preventDefault here as it might interfere with other UI if we add it (e.g. buttons outside canvas)
+    if (gameState === 'won') {
+        canRestartOnClick = true; // Arm restart for the next click/tap
+        // Don't do normal game actions if game is won
+        if (player.isMovingToTarget) player.isMovingToTarget = false; // Still stop player if they were moving via touch
+        return;
+    }
+
     if (player.isMovingToTarget) {
         player.isMovingToTarget = false;
     }
@@ -792,6 +846,58 @@ canvas.addEventListener('mouseup', handlePointerUp);
 canvas.addEventListener('mouseout', handlePointerUp); // Stop if mouse leaves canvas while pressed
 canvas.addEventListener('touchend', handlePointerUp);
 canvas.addEventListener('touchcancel', handlePointerUp);
+
+function resetGame() {
+    console.log("Resetting game...");
+    gameState = 'playing';
+    canRestartOnClick = false;
+
+    // score = 0; // Removed
+    gameStartTime = Date.now();
+    elapsedTime = "00:00";
+    finalGameTime = "00:00";
+
+    // Reset player
+    player.hasMedicine = false;
+    player.isMovingToTarget = false;
+    player.targetX = null;
+    player.targetY = null;
+    player.facingDirection = 'right';
+    updatePlayerImage(); // To set shipEmptyRight initially
+    // Player position will be set after factory is re-initialized by initializeIslands indirectly
+    // For now, let's set it explicitly. Factory is always worldWidth/2, worldHeight/2 based.
+    player.x = worldWidth / 2 - player.width / 2; 
+    player.y = (worldHeight / 2 - factory.height / 2) + factory.height + 50; // Below factory center
+
+
+    // Re-initialize islands (random positions) and dogs on them
+    initializeIslands(); 
+    initializeDogsOnIslands();
+    updateDogsRemainingCount(); // Initial count of dogs
+
+    // Reset pirate
+    if (islands.length > 0) {
+        pirate.x = islands[0].x + islands[0].width / 2 - pirate.width / 2;
+        pirate.y = islands[0].y - pirate.height - 30; // Slightly above the first new island
+    } else {
+        pirate.x = -200; // Fallback if no islands
+        pirate.y = -200;
+    }
+    pirate.isChasing = false;
+    pirate.isDepartingIsland = false;
+    pirate.patrolTargetIndex = 0;
+    pirate.facingDirection = 'right';
+    updatePirateImage();
+    updateDogsRemainingCount(); // Also call after dogs are initialized in reset
+
+    // Reset camera - will be centered on player by updateCamera() in the next frame
+    // No specific camera reset needed here as updateCamera() handles it.
+
+    // Clear any lingering key presses
+    for (const key in keysPressed) {
+        keysPressed[key] = false;
+    }
+}
 
 // Initial check in case images are already cached and loaded quickly
 if (imagesLoaded === totalImages && totalImages > 0) {
@@ -808,4 +914,87 @@ if (imagesLoaded === totalImages && totalImages > 0) {
     gameLoop();
 } else if (totalImages === 0) {
     console.error("No images to load.");
+}
+
+function updatePirateImage() {
+    let newImageKey = 'pirate';
+    newImageKey += pirate.facingDirection.charAt(0).toUpperCase() + pirate.facingDirection.slice(1);
+    pirate.currentImageKey = newImageKey;
+}
+
+function checkCollisions() {
+    if (gameState !== 'playing') return; // Don't check collisions if game is won or paused
+
+    // Player collision with factory
+    if (rectCollision(player, factory)) {
+        if (!player.hasMedicine) {
+            player.hasMedicine = true;
+            console.log("Picked up medicine!");
+            // Player image updates in main update loop via updatePlayerImage()
+        }
+    }
+
+    // Player collision with islands (for delivering medicine)
+    islands.forEach(island => {
+        if (rectCollision(player, island)) {
+            if (player.hasMedicine) {
+                let medicineDeliveredThisIsland = false;
+                island.dogs.forEach(dog => {
+                    if (dog.state === 'asleep') {
+                        dog.state = 'awake';
+                        dog.currentImageKey = `dog${dog.type}Awake`;
+                        // Score was removed, no points here now
+                        medicineDeliveredThisIsland = true;
+                        console.log(`Dog type ${dog.type} on ${island.imageKey} woke up!`);
+                    }
+                });
+
+                if (medicineDeliveredThisIsland) {
+                    player.hasMedicine = false; // Consume medicine
+                    console.log(`Delivered medicine to ${island.imageKey}!`);
+                    // Player image updates in main update loop
+                    checkWinCondition(); // Check if all dogs are now awake
+                }
+            }
+        }
+    });
+
+    // Player collision with pirate
+    if (pirate.isActive && rectCollision(player, pirate)) {
+        if (player.hasMedicine) {
+            player.hasMedicine = false;
+            console.log("The pirate stole your medicine!");
+            pirate.isChasing = false; // Pirate stops chasing and resumes patrol
+            // Player image updates in main update loop
+        }
+    }
+}
+
+function isCollidingWithObstacles(rect) {
+    if (!rect) return false; // Guard clause
+
+    // Check collision with the factory
+    const effectiveFactoryHitbox = {
+        x: factory.x + obstacleCollisionPadding,
+        y: factory.y + obstacleCollisionPadding,
+        width: Math.max(0, factory.width - 2 * obstacleCollisionPadding), 
+        height: Math.max(0, factory.height - 2 * obstacleCollisionPadding)
+    };
+    if (rectCollision(rect, effectiveFactoryHitbox)) {
+        return true;
+    }
+
+    // Check collision with any of the islands
+    for (const island of islands) {
+        const effectiveIslandHitbox = {
+            x: island.x + obstacleCollisionPadding,
+            y: island.y + obstacleCollisionPadding,
+            width: Math.max(0, island.width - 2 * obstacleCollisionPadding),
+            height: Math.max(0, island.height - 2 * obstacleCollisionPadding)
+        };
+        if (rectCollision(rect, effectiveIslandHitbox)) {
+            return true;
+        }
+    }
+    return false;
 } 
