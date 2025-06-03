@@ -1,16 +1,12 @@
 body {
     margin: 0;
     overflow: hidden; /* Prevent scrollbars */
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    background-color: #000;
+    background-color: #000; /* Keep the black background for areas not covered by canvas if any (though should be none) */
 }
 
 canvas {
-    /* border: 1px solid white; */ /* Removing fixed border */
-    display: block; /* To remove extra space below canvas if any */
-    width: 100%;
-    height: 100%;
+    display: block; /* Prevent potential extra space below canvas */
+    width: 100vw; /* Make canvas fill viewport width */
+    height: 100vh; /* Make canvas fill viewport height */
+    /* border: 1px solid white; */ /* Was commented out, keeping it that way */
 } 

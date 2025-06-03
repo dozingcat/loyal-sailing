@@ -1,12 +1,17 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = true; // Explicitly enable image smoothing
+ctx.imageSmoothingQuality = 'high'; // Suggest high quality for image smoothing
 
-// Set canvas dimensions
+// Set canvas dimensions initially (will be updated by resizeCanvas)
 canvas.width = 2400;
 canvas.height = 1800;
 
 const worldWidth = 4800; // Double the canvas width
 const worldHeight = 3600; // Double the canvas height
+
+const zoomLevel = 0.75; // Zoom out by 25% (objects appear 75% of original size on screen)
+const renderScaleMultiplier = 2.0; // Render at 2.0x resolution for crispness
 
 const camera = {
     x: 0,
@@ -17,26 +22,17 @@ const camera = {
 };
 
 function resizeCanvas() {
-    const aspectRatio = 2400 / 1800; // 4/3
-    let newWidth = window.innerWidth;
-    let newHeight = window.innerHeight;
-    const windowAspectRatio = newWidth / newHeight;
+    // Set canvas internal resolution to a higher density for crisper rendering
+    canvas.width = window.innerWidth * renderScaleMultiplier;
+    canvas.height = window.innerHeight * renderScaleMultiplier;
 
-    if (windowAspectRatio > aspectRatio) {
-        // Window is wider than the game, so height is the limiting factor
-        newWidth = newHeight * aspectRatio;
-        canvas.style.height = newHeight + 'px';
-        canvas.style.width = newWidth + 'px';
-    } else {
-        // Window is taller (or same aspect ratio) than the game, so width is the limiting factor
-        newHeight = newWidth / aspectRatio;
-        canvas.style.width = newWidth + 'px';
-        canvas.style.height = newHeight + 'px';
-    }
+    // Update camera dimensions based on CSS window size and desired on-screen zoomLevel
+    // This determines how much of the world is visible.
+    camera.width = window.innerWidth / zoomLevel;
+    camera.height = window.innerHeight / zoomLevel;
 
-    // Center the canvas
-    canvas.style.marginLeft = (window.innerWidth - newWidth) / 2 + 'px';
-    canvas.style.marginTop = (window.innerHeight - newHeight) / 2 + 'px';
+    // No need to enforce aspect ratio or set margins for the canvas element itself,
+    // as CSS is handling making it fill the window.
 }
 
 // Call resizeCanvas initially and on window resize
@@ -145,7 +141,10 @@ const player = {
     speed: 8, // Player movement speed
     hasMedicine: false,
     facingDirection: 'right', // 'left' or 'right'
-    currentImageKey: 'shipEmptyRight' // Initial image
+    currentImageKey: 'shipEmptyRight', // Initial image
+    targetX: null,
+    targetY: null,
+    isMovingToTarget: false
 };
 
 const pirate = {
@@ -183,17 +182,39 @@ function updatePlayerImage() {
 }
 
 function drawBackground() {
-    // Tile the background image relative to the camera
     ctx.save();
-    ctx.translate(- (camera.x % images.background.width), - (camera.y % images.background.height));
-    const numX = Math.ceil(camera.width / images.background.width) + 1;
-    const numY = Math.ceil(camera.height / images.background.height) + 1;
-    for (let i = 0; i < numX; i++) {
-        for (let j = 0; j < numY; j++) {
+    const finalScale = zoomLevel * renderScaleMultiplier;
+
+    const bgTileWidthOnScreen = images.background.width * finalScale;
+    const bgTileHeightOnScreen = images.background.height * finalScale;
+
+    if (bgTileWidthOnScreen <= 0 || bgTileHeightOnScreen <= 0) {
+        ctx.restore();
+        return;
+    }
+
+    // Calculate the effective camera position on the scaled (high-res) grid
+    const effectiveCamX = camera.x * finalScale;
+    const effectiveCamY = camera.y * finalScale;
+
+    const offsetX = -(effectiveCamX % bgTileWidthOnScreen);
+    const offsetY = -(effectiveCamY % bgTileHeightOnScreen);
+
+    // Number of tiles to draw to fill the canvas (which is now larger internally)
+    const numX = Math.ceil(canvas.width / bgTileWidthOnScreen) + 1;
+    const numY = Math.ceil(canvas.height / bgTileHeightOnScreen) + 1;
+
+    for (let j = 0; j < numY; j++) {
+        for (let i = 0; i < numX; i++) {
             if (images.background.complete && images.background.naturalHeight !== 0) {
-                 ctx.drawImage(images.background, i * images.background.width, j * images.background.height);
+                ctx.drawImage(
+                    images.background, 
+                    offsetX + i * bgTileWidthOnScreen, 
+                    offsetY + j * bgTileHeightOnScreen, 
+                    bgTileWidthOnScreen, 
+                    bgTileHeightOnScreen
+                );
             } else {
-                // console.warn("Background image not ready for tiling or is broken."); // Can be spammy
                 break; 
             }
         }
@@ -265,23 +286,58 @@ function drawPirate() {
 }
 
 function update() {
-    // Player movement
     let dx = 0;
     let dy = 0;
 
-    if (keysPressed['ArrowUp'] || keysPressed['w']) {
-        dy -= player.speed;
+    // Check for keyboard input first to see if it overrides touch/click
+    let keyboardInputDetected = false;
+    if (keysPressed['ArrowUp'] || keysPressed['w'] ||
+        keysPressed['ArrowDown'] || keysPressed['s'] ||
+        keysPressed['ArrowLeft'] || keysPressed['a'] ||
+        keysPressed['ArrowRight'] || keysPressed['d']) {
+        keyboardInputDetected = true;
+        if (player.isMovingToTarget) {
+            player.isMovingToTarget = false; // Keyboard overrides touch/click
+        }
     }
-    if (keysPressed['ArrowDown'] || keysPressed['s']) {
-        dy += player.speed;
-    }
-    if (keysPressed['ArrowLeft'] || keysPressed['a']) {
-        dx -= player.speed;
-        player.facingDirection = 'left';
-    }
-    if (keysPressed['ArrowRight'] || keysPressed['d']) {
-        dx += player.speed;
-        player.facingDirection = 'right';
+
+    if (player.isMovingToTarget) {
+        const playerCenterX = player.x + player.width / 2;
+        const playerCenterY = player.y + player.height / 2;
+
+        const diffX = player.targetX - playerCenterX;
+        const diffY = player.targetY - playerCenterY;
+        const distanceToTarget = Math.sqrt(diffX * diffX + diffY * diffY);
+
+        if (distanceToTarget < player.speed / 2) { // If very close, stop to prevent overshooting/jitter
+            player.isMovingToTarget = false;
+            // Optional: Snap player center to targetX, targetY if desired
+            // player.x = player.targetX - player.width / 2;
+            // player.y = player.targetY - player.height / 2;
+        } else {
+            dx = (diffX / distanceToTarget) * player.speed;
+            dy = (diffY / distanceToTarget) * player.speed;
+
+            // Update facing direction based on movement for touch/click
+            if (Math.abs(dx) > 0.1) { // Only change if moving horizontally significantly
+                 player.facingDirection = dx > 0 ? 'right' : 'left';
+            }
+        }
+    } else if (keyboardInputDetected) { // Process keyboard movement if no touch/click target or overridden
+        if (keysPressed['ArrowUp'] || keysPressed['w']) {
+            dy -= player.speed;
+        }
+        if (keysPressed['ArrowDown'] || keysPressed['s']) {
+            dy += player.speed;
+        }
+        if (keysPressed['ArrowLeft'] || keysPressed['a']) {
+            dx -= player.speed;
+            player.facingDirection = 'left';
+        }
+        if (keysPressed['ArrowRight'] || keysPressed['d']) {
+            dx += player.speed;
+            player.facingDirection = 'right';
+        }
     }
 
     // Check horizontal collision
@@ -485,30 +541,25 @@ function isCollidingWithObstacles(rect) {
 }
 
 function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear visible canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear visible canvas (now higher res)
 
-    // Draw background first, it handles its own camera logic for tiling
     drawBackground(); 
 
     ctx.save();
+    // Apply combined scale for zoom and higher rendering resolution
+    const finalScale = zoomLevel * renderScaleMultiplier;
+    ctx.scale(finalScale, finalScale);
     ctx.translate(-camera.x, -camera.y);
 
-    // Draw all world objects (their x,y are world coordinates)
-    // drawFactory(); // Factory is part of world objects, not background
-    // drawIslands(); // Islands are part of world objects
-    // drawPlayer();
-    // drawDogs();
-    // drawPirate();
-    // Re-call these in order as they were before
     drawFactory();
     drawIslands();
     drawPlayer();
     drawDogs();
     drawPirate();
 
-    ctx.restore();
+    ctx.restore(); // This restores the scale and translate
 
-    // Draw UI elements (like score) last, so they are on top and not affected by camera
+    // Draw UI elements (like score) last, so they are on top and not affected by camera or zoom
     drawScore();
 }
 
@@ -537,6 +588,34 @@ function rectAppearsInCamera(rect) {
         rect.y + rect.height > camera.y
     );
 }
+
+// Event listeners for click/touch steering
+function handlePointerDown(event) {
+    event.preventDefault(); // Prevent default browser actions (like scrolling on touch)
+    const rect = canvas.getBoundingClientRect();
+    let clickX, clickY;
+
+    if (event.touches) {
+        clickX = event.touches[0].clientX - rect.left;
+        clickY = event.touches[0].clientY - rect.top;
+    } else {
+        clickX = event.clientX - rect.left;
+        clickY = event.clientY - rect.top;
+    }
+
+    // Convert screen click coordinates to world coordinates
+    player.targetX = (clickX / zoomLevel) + camera.x;
+    player.targetY = (clickY / zoomLevel) + camera.y;
+    player.isMovingToTarget = true;
+
+    // Clear keyboard presses so click/touch takes precedence if both happen
+    for (const key in keysPressed) {
+        keysPressed[key] = false;
+    }
+}
+
+canvas.addEventListener('mousedown', handlePointerDown);
+canvas.addEventListener('touchstart', handlePointerDown, { passive: false }); // passive:false to allow preventDefault
 
 // Initial check in case images are already cached and loaded quickly
 if (imagesLoaded === totalImages && totalImages > 0) {
