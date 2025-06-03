@@ -309,20 +309,22 @@ function update() {
         const diffY = player.targetY - playerCenterY;
         const distanceToTarget = Math.sqrt(diffX * diffX + diffY * diffY);
 
-        if (distanceToTarget < player.speed / 2) { // If very close, stop to prevent overshooting/jitter
-            player.isMovingToTarget = false;
-            // Optional: Snap player center to targetX, targetY if desired
-            // player.x = player.targetX - player.width / 2;
-            // player.y = player.targetY - player.height / 2;
-        } else {
+        // Only move if the target is further than a very small threshold to prevent jitter when pointer is on player
+        if (distanceToTarget > player.speed / 4) { 
             dx = (diffX / distanceToTarget) * player.speed;
             dy = (diffY / distanceToTarget) * player.speed;
 
-            // Update facing direction based on movement for touch/click
-            if (Math.abs(dx) > 0.1) { // Only change if moving horizontally significantly
+            if (Math.abs(dx) > 0.1) {
                  player.facingDirection = dx > 0 ? 'right' : 'left';
             }
+        } else {
+            // If the pointer is very close to or on the player, don't set dx/dy, effectively stopping
+            // but isMovingToTarget remains true until pointerup.
+            dx = 0;
+            dy = 0;
         }
+        // NO automatic stopping: player.isMovingToTarget is only set to false on pointer up/out/cancel or keyboard override.
+
     } else if (keyboardInputDetected) { // Process keyboard movement if no touch/click target or overridden
         if (keysPressed['ArrowUp'] || keysPressed['w']) {
             dy -= player.speed;
@@ -616,6 +618,39 @@ function handlePointerDown(event) {
 
 canvas.addEventListener('mousedown', handlePointerDown);
 canvas.addEventListener('touchstart', handlePointerDown, { passive: false }); // passive:false to allow preventDefault
+
+function handlePointerMove(event) {
+    if (!player.isMovingToTarget) return; // Only act if mouse/touch is already down
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    let moveX, moveY;
+
+    if (event.touches) {
+        moveX = event.touches[0].clientX - rect.left;
+        moveY = event.touches[0].clientY - rect.top;
+    } else {
+        moveX = event.clientX - rect.left;
+        moveY = event.clientY - rect.top;
+    }
+
+    player.targetX = (moveX / zoomLevel) + camera.x;
+    player.targetY = (moveY / zoomLevel) + camera.y;
+}
+
+canvas.addEventListener('mousemove', handlePointerMove);
+canvas.addEventListener('touchmove', handlePointerMove, { passive: false });
+
+function handlePointerUp(event) {
+    // No preventDefault here as it might interfere with other UI if we add it (e.g. buttons outside canvas)
+    if (player.isMovingToTarget) {
+        player.isMovingToTarget = false;
+    }
+}
+
+canvas.addEventListener('mouseup', handlePointerUp);
+canvas.addEventListener('mouseout', handlePointerUp); // Stop if mouse leaves canvas while pressed
+canvas.addEventListener('touchend', handlePointerUp);
+canvas.addEventListener('touchcancel', handlePointerUp);
 
 // Initial check in case images are already cached and loaded quickly
 if (imagesLoaded === totalImages && totalImages > 0) {
