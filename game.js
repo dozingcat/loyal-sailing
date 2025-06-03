@@ -5,6 +5,17 @@ const ctx = canvas.getContext('2d');
 canvas.width = 2400;
 canvas.height = 1800;
 
+const worldWidth = 4800; // Double the canvas width
+const worldHeight = 3600; // Double the canvas height
+
+const camera = {
+    x: 0,
+    y: 0,
+    width: canvas.width,
+    height: canvas.height,
+    // We can add some dead zone or smoothing later if needed
+};
+
 function resizeCanvas() {
     const aspectRatio = 2400 / 1800; // 4/3
     let newWidth = window.innerWidth;
@@ -58,8 +69,8 @@ const imageSources = {
 };
 
 const dogTypes = [1, 2, 3, 4];
-const dogImageWidth = 75; // Increased from 60 by 25%
-const dogImageHeight = 75; // Increased from 60 by 25%
+const dogImageWidth = 112.5; // Increased from 75 by 50%
+const dogImageHeight = 112.5; // Increased from 75 by 50%
 
 let imagesLoaded = 0;
 const totalImages = Object.keys(imageSources).length;
@@ -85,17 +96,18 @@ for (const key in imageSources) {
 
 // Game objects
 const factory = {
-    x: canvas.width / 2 - 150, // Scaled: (canvas.width / 2 - 100) * 1.5 -> canvas.width / 2 - 150
-    y: canvas.height / 2 - 150, // Scaled: (canvas.height / 2 - 100) * 1.5 -> canvas.height / 2 - 150
-    width: 300, // Scaled: 200 * 1.5
-    height: 300 // Scaled: 200 * 1.5
+    x: worldWidth / 2 - 150, // Centered in the world
+    y: worldHeight / 2 - 150,
+    width: 300,
+    height: 300
 };
 
 const islands = [
-    { x: 300, y: 300, width: 240, height: 240, imageKey: 'island1', dogs: [] },
-    { x: 1800, y: 450, width: 240, height: 240, imageKey: 'island2', dogs: [] },
-    { x: 450, y: 1200, width: 240, height: 240, imageKey: 'island3', dogs: [] },
-    { x: 1650, y: 1350, width: 240, height: 240, imageKey: 'island4', dogs: [] }
+    // Spread out in the larger world, now 50% bigger (360x360)
+    { x: worldWidth * 0.2 - 180, y: worldHeight * 0.2 - 180, width: 360, height: 360, imageKey: 'island1', dogs: [] }, 
+    { x: worldWidth * 0.8 - 180, y: worldHeight * 0.3 - 180, width: 360, height: 360, imageKey: 'island2', dogs: [] }, 
+    { x: worldWidth * 0.25 - 180, y: worldHeight * 0.75 - 180, width: 360, height: 360, imageKey: 'island3', dogs: [] }, 
+    { x: worldWidth * 0.7 - 180, y: worldHeight * 0.8 - 180, width: 360, height: 360, imageKey: 'island4', dogs: [] }
 ];
 
 function initializeDogsOnIslands() {
@@ -126,9 +138,9 @@ function initializeDogsOnIslands() {
 }
 
 const player = {
-    x: canvas.width / 2 - 75, // Start near the factory
-    y: factory.y + factory.height + 50, // Start below the factory
-    width: 150, // Player ship size (adjust as needed)
+    x: worldWidth / 2 - 75, // Start near the factory in the world
+    y: factory.y + factory.height + 50, 
+    width: 150,
     height: 150,
     speed: 8, // Player movement speed
     hasMedicine: false,
@@ -171,51 +183,64 @@ function updatePlayerImage() {
 }
 
 function drawBackground() {
-    // Tile the background image
-    const bgPattern = ctx.createPattern(images.background, 'repeat');
-    ctx.fillStyle = bgPattern;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Tile the background image relative to the camera
+    ctx.save();
+    ctx.translate(- (camera.x % images.background.width), - (camera.y % images.background.height));
+    const numX = Math.ceil(camera.width / images.background.width) + 1;
+    const numY = Math.ceil(camera.height / images.background.height) + 1;
+    for (let i = 0; i < numX; i++) {
+        for (let j = 0; j < numY; j++) {
+            if (images.background.complete && images.background.naturalHeight !== 0) {
+                 ctx.drawImage(images.background, i * images.background.width, j * images.background.height);
+            } else {
+                // console.warn("Background image not ready for tiling or is broken."); // Can be spammy
+                break; 
+            }
+        }
+    }
+    ctx.restore();
 }
 
 function drawFactory() {
-    if (images.factory.complete && images.factory.naturalHeight !== 0) {
-        ctx.drawImage(images.factory, factory.x, factory.y, factory.width, factory.height);
-    } else {
-        console.warn("Factory image not ready to draw or is broken.");
+    if (rectAppearsInCamera(factory)) {
+        if (images.factory.complete && images.factory.naturalHeight !== 0) {
+            ctx.drawImage(images.factory, factory.x, factory.y, factory.width, factory.height);
+        }
     }
 }
 
 function drawIslands() {
     islands.forEach(island => {
-        if (images[island.imageKey] && images[island.imageKey].complete && images[island.imageKey].naturalHeight !== 0) {
-            ctx.drawImage(images[island.imageKey], island.x, island.y, island.width, island.height);
-        } else {
-             console.warn(`Island image ${island.imageKey} not ready to draw or is broken.`);
+        if (rectAppearsInCamera(island)) {
+            if (images[island.imageKey] && images[island.imageKey].complete && images[island.imageKey].naturalHeight !== 0) {
+                ctx.drawImage(images[island.imageKey], island.x, island.y, island.width, island.height);
+            }
         }
     });
 }
 
 function drawPlayer() {
-    if (images[player.currentImageKey] && images[player.currentImageKey].complete && images[player.currentImageKey].naturalHeight !== 0) {
-        ctx.drawImage(images[player.currentImageKey], player.x, player.y, player.width, player.height);
-    } else {
-        console.warn(`Player image ${player.currentImageKey} not ready to draw or is broken.`);
+    // Player is always technically in camera view due to camera following, but check is good practice
+    if (rectAppearsInCamera(player)) { 
+        if (images[player.currentImageKey] && images[player.currentImageKey].complete && images[player.currentImageKey].naturalHeight !== 0) {
+            ctx.drawImage(images[player.currentImageKey], player.x, player.y, player.width, player.height);
+        }
     }
 }
 
 function drawDogs() {
     islands.forEach(island => {
-        island.dogs.forEach(dog => {
-            if (images[dog.currentImageKey] && images[dog.currentImageKey].complete && images[dog.currentImageKey].naturalHeight !== 0) {
-                // Use the dog's stored width and height, which were based on constants.
-                // Or, for more accuracy, use images[dog.currentImageKey].naturalWidth/Height
-                // For now, let's use a fixed size or the one set during initialization.
-                // The dog x,y are already absolute positions.
-                ctx.drawImage(images[dog.currentImageKey], dog.x, dog.y, dog.width, dog.height);
-            } else {
-                console.warn(`Dog image ${dog.currentImageKey} not ready to draw or is broken.`);
-            }
-        });
+        // Only process dogs if the island itself might be visible
+        if (rectAppearsInCamera(island)) { 
+            island.dogs.forEach(dog => {
+                // Dog x, y are already world coordinates
+                if (rectAppearsInCamera(dog)) {
+                    if (images[dog.currentImageKey] && images[dog.currentImageKey].complete && images[dog.currentImageKey].naturalHeight !== 0) {
+                        ctx.drawImage(images[dog.currentImageKey], dog.x, dog.y, dog.width, dog.height);
+                    }
+                }
+            });
+        }
     });
 }
 
@@ -231,12 +256,11 @@ function updatePirateImage() {
 }
 
 function drawPirate() {
-    if (!pirate.isActive && !pirate.isReturning) return; // Don't draw if fully inactive and not returning
-
-    if (images[pirate.currentImageKey] && images[pirate.currentImageKey].complete && images[pirate.currentImageKey].naturalHeight !== 0) {
-        ctx.drawImage(images[pirate.currentImageKey], pirate.x, pirate.y, pirate.width, pirate.height);
-    } else {
-        console.warn(`Pirate image ${pirate.currentImageKey} not ready to draw or is broken.`);
+    if (!pirate.isActive && !pirate.isReturning) return;
+    if (rectAppearsInCamera(pirate)) {
+        if (images[pirate.currentImageKey] && images[pirate.currentImageKey].complete && images[pirate.currentImageKey].naturalHeight !== 0) {
+            ctx.drawImage(images[pirate.currentImageKey], pirate.x, pirate.y, pirate.width, pirate.height);
+        }
     }
 }
 
@@ -290,15 +314,16 @@ function update() {
     updatePlayerImage();
     console.log(`Facing: ${player.facingDirection}, Current Image: ${player.currentImageKey}`); // DEBUG LOG
 
-    // Keep player within canvas bounds
+    // Keep player within world bounds
     if (player.x < 0) player.x = 0;
-    if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+    if (player.x + player.width > worldWidth) player.x = worldWidth - player.width;
     if (player.y < 0) player.y = 0;
-    if (player.y + player.height > canvas.height) player.y = canvas.height - player.height;
+    if (player.y + player.height > worldHeight) player.y = worldHeight - player.height;
 
     // Game logic will go here (e.g., collision detection)
     checkCollisions();
     updatePirate(); // Call pirate update logic
+    updateCamera(); // Call camera update logic
 
     drawPlayer();
     drawDogs();
@@ -333,23 +358,24 @@ function updatePirate() {
         }
     } else if (player.hasMedicine) {
         if (!pirate.isActive) {
-            // Activate pirate and place it randomly on one of the screen edges
             pirate.isActive = true;
+            pirate.isReturning = false; // Ensure it is not returning when activated
             const edge = Math.floor(Math.random() * 4);
-            if (edge === 0) { // Top edge
-                pirate.x = Math.random() * canvas.width;
-                pirate.y = -pirate.height;
-            } else if (edge === 1) { // Bottom edge
-                pirate.x = Math.random() * canvas.width;
-                pirate.y = canvas.height;
-            } else if (edge === 2) { // Left edge
-                pirate.x = -pirate.width;
-                pirate.y = Math.random() * canvas.height;
-            } else { // Right edge
-                pirate.x = canvas.width;
-                pirate.y = Math.random() * canvas.height;
+            // Spawn relative to camera view, then convert to world coordinates
+            if (edge === 0) { // Top edge of camera
+                pirate.x = camera.x + Math.random() * camera.width;
+                pirate.y = camera.y - pirate.height;
+            } else if (edge === 1) { // Bottom edge of camera
+                pirate.x = camera.x + Math.random() * camera.width;
+                pirate.y = camera.y + camera.height;
+            } else if (edge === 2) { // Left edge of camera
+                pirate.x = camera.x - pirate.width;
+                pirate.y = camera.y + Math.random() * camera.height;
+            } else { // Right edge of camera
+                pirate.x = camera.x + camera.width;
+                pirate.y = camera.y + Math.random() * camera.height;
             }
-            console.log("Pirate activated!");
+            console.log("Pirate activated at world coords:", pirate.x, pirate.y);
         }
 
         // Chase player
@@ -459,21 +485,57 @@ function isCollidingWithObstacles(rect) {
 }
 
 function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear visible canvas
 
-    drawBackground();
+    // Draw background first, it handles its own camera logic for tiling
+    drawBackground(); 
+
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+
+    // Draw all world objects (their x,y are world coordinates)
+    // drawFactory(); // Factory is part of world objects, not background
+    // drawIslands(); // Islands are part of world objects
+    // drawPlayer();
+    // drawDogs();
+    // drawPirate();
+    // Re-call these in order as they were before
     drawFactory();
     drawIslands();
     drawPlayer();
     drawDogs();
-    drawScore();
     drawPirate();
+
+    ctx.restore();
+
+    // Draw UI elements (like score) last, so they are on top and not affected by camera
+    drawScore();
 }
 
 function gameLoop() {
     update();
     draw();
     requestAnimationFrame(gameLoop);
+}
+
+function updateCamera() {
+    // Target camera position to center the player
+    let targetX = player.x + player.width / 2 - camera.width / 2;
+    let targetY = player.y + player.height / 2 - camera.height / 2;
+
+    // Clamp camera to world boundaries
+    camera.x = Math.max(0, Math.min(targetX, worldWidth - camera.width));
+    camera.y = Math.max(0, Math.min(targetY, worldHeight - camera.height));
+}
+
+// Helper function to check if a rectangle is within camera view
+function rectAppearsInCamera(rect) {
+    return (
+        rect.x < camera.x + camera.width &&
+        rect.x + rect.width > camera.x &&
+        rect.y < camera.y + camera.height &&
+        rect.y + rect.height > camera.y
+    );
 }
 
 // Initial check in case images are already cached and loaded quickly
